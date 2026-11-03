@@ -3,9 +3,11 @@
 import json
 import warnings
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 import pandas as pd
+from scipy.stats import f as distribucion_f
 from scipy.stats import studentized_range
 from statsmodels.formula.api import ols
 from statsmodels.regression.linear_model import RegressionResultsWrapper
@@ -13,11 +15,14 @@ from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 
-def cargar_datos(archivo: str | Path) -> pd.DataFrame:
+def cargar_datos(
+    archivo: str | Path | BinaryIO, nombre_archivo: str | None = None
+) -> pd.DataFrame:
     """Lee datos desde un archivo CSV o Excel.
 
     Args:
-        archivo: Ruta de un archivo CSV o Excel con extensión `.xlsx`.
+        archivo: Ruta o flujo binario de un archivo CSV o Excel `.xlsx`.
+        nombre_archivo: Nombre original para identificar la extensión de un flujo.
 
     Returns:
         Un DataFrame con los datos del archivo.
@@ -25,14 +30,24 @@ def cargar_datos(archivo: str | Path) -> pd.DataFrame:
     Raises:
         ValueError: Si la extensión no corresponde a CSV o Excel `.xlsx`.
     """
-    ruta = Path(archivo)
+    # Paso 1: se obtiene la extensión de la ruta o del nombre original del archivo cargado.
+    ruta = Path(archivo) if isinstance(archivo, (str, Path)) else None
+    nombre = nombre_archivo or (
+        str(ruta) if ruta is not None else getattr(archivo, "name", "")
+    )
+    extension = Path(nombre).suffix.lower()
+    origen = ruta if ruta is not None else archivo
 
-    # Paso 1: se elige el lector según la extensión; para CSV se detecta , o ;.
+    # Paso 2: se elige el lector según la extensión; para CSV se detecta , o ;.
     # Regla de lectura: .csv -> sep=None; .xlsx -> lector de Excel.
-    if ruta.suffix.lower() == ".csv":
-        return pd.read_csv(ruta, sep=None, engine="python")
-    if ruta.suffix.lower() == ".xlsx":
-        return pd.read_excel(ruta)
+    if extension == ".csv":
+        if hasattr(origen, "seek"):
+            origen.seek(0)
+        return pd.read_csv(origen, sep=None, engine="python")
+    if extension == ".xlsx":
+        if hasattr(origen, "seek"):
+            origen.seek(0)
+        return pd.read_excel(origen)
 
     raise ValueError("El archivo debe tener extensión .csv o .xlsx.")
 
@@ -362,4 +377,38 @@ def interpretar_dca(tabla: pd.DataFrame, alfa: float = 0.05) -> str:
         "No se rechaza H₀: no hay evidencia suficiente para afirmar que las medias "
         "de los tratamientos difieren. Esto no demuestra que sean iguales; contrasta "
         "la decisión con los supuestos y el criterio agronómico."
+    )
+
+
+def f_critica(tabla: pd.DataFrame, alfa: float = 0.05) -> float:
+    """Obtiene el valor crítico de F para tratamientos en una tabla ANOVA.
+
+    Args:
+        tabla: Tabla ANOVA con las filas Tratamientos y Error.
+        alfa: Nivel de significancia entre cero y uno.
+
+    Returns:
+        El cuantil superior de la distribución F para los grados de libertad del DCA.
+
+    Raises:
+        ValueError: Si alfa o las filas de grados de libertad no son válidos.
+    """
+    # Paso 1: se extraen los grados de libertad del factor y del error del ANOVA.
+    if not 0 < alfa < 1:
+        raise ValueError("El nivel alfa debe estar entre cero y uno.")
+    if "Fuente" not in tabla.columns or "gl" not in tabla.columns:
+        raise ValueError("La tabla debe incluir las columnas 'Fuente' y 'gl'.")
+    gl_tratamientos = tabla.loc[tabla["Fuente"] == "Tratamientos", "gl"]
+    gl_error = tabla.loc[tabla["Fuente"] == "Error", "gl"]
+    if gl_tratamientos.empty or gl_error.empty:
+        raise ValueError("La tabla debe incluir las filas Tratamientos y Error.")
+
+    # Paso 2: se busca el cuantil superior para comparar el F observado con el umbral.
+    # Fórmula: F crítica = F⁻¹(1 - alfa; gl_tratamientos; gl_error).
+    return float(
+        distribucion_f.ppf(
+            1 - alfa,
+            float(gl_tratamientos.iloc[0]),
+            float(gl_error.iloc[0]),
+        )
     )
