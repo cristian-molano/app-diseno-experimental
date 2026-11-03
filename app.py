@@ -1,4 +1,4 @@
-AUTOR = "Cristian Monlano"
+AUTOR = "Cristian Molano"
 
 import streamlit as st
 
