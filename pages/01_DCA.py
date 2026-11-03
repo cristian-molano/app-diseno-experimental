@@ -16,6 +16,13 @@ from utils.anova_utils import (
 	tukey,
 	validar_dca,
 )
+from utils.diagnostico_utils import (
+	grafico_qq,
+	grafico_residuos_vs_ajustados,
+	prueba_levene,
+	prueba_shapiro,
+	residuos_y_ajustados,
+)
 
 ARCHIVO_EJEMPLO = Path(__file__).resolve().parents[1] / "data" / "dca_secadores.csv"
 
@@ -115,8 +122,37 @@ except (ValueError, TypeError, KeyError) as error:
 	st.error(f"No fue posible analizar los datos: {error}")
 	st.stop()
 
-pestana_datos, pestana_anova, pestana_comparaciones, pestana_graficos = st.tabs(
-	["Datos", "ANOVA", "Comparaciones", "Gráficos"]
+try:
+	residuos, ajustados = residuos_y_ajustados(modelo)
+	estadistico_shapiro, p_shapiro, conclusion_shapiro = prueba_shapiro(
+		residuos, alfa
+	)
+	estadistico_levene, p_levene, conclusion_levene = prueba_levene(
+		datos, columna_tratamiento, columna_respuesta, alfa
+	)
+except ValueError as error:
+	st.error(f"No fue posible revisar los supuestos: {error}")
+	st.stop()
+
+tabla_supuestos = pd.DataFrame(
+	[
+		{
+			"Prueba": "Shapiro-Wilk (normalidad)",
+			"Estadístico": estadistico_shapiro,
+			"p-valor": p_shapiro,
+			"Conclusión": conclusion_shapiro,
+		},
+		{
+			"Prueba": "Levene (homogeneidad de varianzas)",
+			"Estadístico": estadistico_levene,
+			"p-valor": p_levene,
+			"Conclusión": conclusion_levene,
+		},
+	]
+)
+
+pestana_datos, pestana_anova, pestana_comparaciones, pestana_graficos, pestana_supuestos = st.tabs(
+	["Datos", "ANOVA", "Comparaciones", "Gráficos", "Supuestos"]
 )
 
 with pestana_datos:
@@ -192,3 +228,27 @@ with pestana_graficos:
 		title="Media y desviación estándar por tratamiento",
 	)
 	st.plotly_chart(figura_medias, width="stretch")
+
+with pestana_supuestos:
+	st.subheader("Diagnóstico de supuestos del DCA")
+	st.write(
+		"Shapiro-Wilk revisa si los residuos son compatibles con una distribución normal. "
+		"Levene, centrada en la mediana, revisa si la variabilidad de la respuesta es "
+		"similar entre tratamientos."
+	)
+	st.dataframe(
+		tabla_supuestos.style.format(
+			{"Estadístico": "{:.4f}", "p-valor": "{:.4f}"}, na_rep="—"
+		),
+		width="stretch",
+	)
+	st.plotly_chart(
+		grafico_residuos_vs_ajustados(ajustados, residuos), width="stretch"
+	)
+	st.plotly_chart(grafico_qq(residuos), width="stretch")
+	st.info(
+		"Independencia: se sustenta en la asignación aleatoria de los tratamientos y "
+		"en que las unidades experimentales sean independientes. Shapiro-Wilk y Levene "
+		"no prueban independencia; esta condición se justifica con el protocolo y la "
+		"ejecución del experimento."
+	)
